@@ -22,3 +22,5 @@ archive/*
 .vscode
 **/*.code-workspace
 code/run.sh
+.*.swp
+.*.swo
