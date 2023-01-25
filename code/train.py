@@ -15,6 +15,9 @@ import os
 import glob
 import sys
 import random
+import logging
+
+logging.basicConfig(filename="train.log", encoding="utf-8", level=logging.DEBUG)
 
 seed = 0
 torch.manual_seed(seed)
@@ -37,11 +40,12 @@ def get_git_revision_short_hash():
 
 
 config = get_config(sys.argv[1])
+logging.info(f"Loaded config: {sys.argv[1]}")
 alias = sys.argv[1].split("/")[-1].split(".")[0]
 try:
     models_path = os.path.join("../models", f"{alias}__{get_git_revision_short_hash()}")
-    os.mkdir(tb_path)
     os.mkdir(models_path)
+    os.mkdir(tb_path)
 except:
     pass
 last_checkpoint = get_last_file(models_path)
@@ -52,7 +56,7 @@ model.cuda()
 optimizer = Adam(model.parameters(), **config["train"]["optimizer"])
 if config["train"]["scheduler"]:
     scheduler = ReduceLROnPlateau(optimizer, patience=20, factor=0.5, verbose=True)
-num_steps = 0
+num_steps = 0  # number of steps that this model has been through
 if last_checkpoint is not None:
     model.load_state_dict(torch.load(last_checkpoint)["model_state_dict"])
     optimizer.load_state_dict(torch.load(last_checkpoint)["optimizer_state_dict"])
@@ -60,7 +64,8 @@ if last_checkpoint is not None:
     if config["train"]["scheduler"]:
         scheduler.load_state_dict(torch.load(last_checkpoint)["scheduler_state_dict"])
     print("LOADED ", last_checkpoint)
-this_num_steps = 0
+    logging.info(f"Loaded checkpoint: {last_checkpoint}")
+this_num_steps = 0  # number of steps _only in this invocation of train.py_
 model_parameters = filter(lambda p: p.requires_grad, model.parameters())
 params = sum([np.prod(p.size()) for p in model_parameters])
 print("N PARAMS=", params)
@@ -68,6 +73,7 @@ print("N PARAMS=", params)
 train_losses = []
 
 for epoch in tqdm(range(config["train"]["n_epochs"])):
+    logging.info(f'Epoch {epoch+1}/{config["train"]["n_epochs"]}')
     pbar = tqdm(dataloader)
     for data in pbar:
         model.train()
@@ -87,6 +93,7 @@ for epoch in tqdm(range(config["train"]["n_epochs"])):
         loss = nll_with_covariances(
             xy_future_gt, coordinates, probas, data["target/future/valid"].squeeze(-1),
             covariance_matrices) * loss_coeff
+        train_loss = loss.item()
         train_losses.append(loss.item())
         loss.backward()
         if "clip_grad_norm" in config["train"]:
@@ -107,22 +114,28 @@ for epoch in tqdm(range(config["train"]["n_epochs"])):
             if config["train"]["scheduler"]:
                 saving_data["scheduler_state_dict"] = scheduler.state_dict()
             torch.save(saving_data, os.path.join(models_path, f"last.pth"))
-        if num_steps % (len(dataloader) // 2) == 0 and this_num_steps > 0:
+        if num_steps % (len(dataloader) // 16) == 0 and this_num_steps > 0:
             del data
             torch.cuda.empty_cache()
             model.eval()
             with torch.no_grad():
                 losses = []
-                min_ades = []
-                first_batch = True
+                logging.debug(f"Computing validation loss...")
                 for data in tqdm(val_dataloader):
                     if config["train"]["normalize"]:
                         data = normalize(data, config)
                     dict_to_cuda(data)
-                    probas, coordinates, _, _ = model(data, num_steps)
+                    probas, coordinates, covariance_matrices, loss_coeff = model(data, num_steps)
+                    xy_future_gt = data["target/future/xy"]
                     if config["train"]["normalize_output"]:
-                        coordinates = coordinates * 10. + torch.Tensor([1.4715e+01, 4.3008e-03]).cuda()
-                train_losses = []
+                        xy_future_gt = (data["target/future/xy"]\
+                                - torch.Tensor([1.4715e+01, 4.3008e-03]).cuda()) / 10.
+                    val_loss = nll_with_covariances(
+                        xy_future_gt, coordinates, probas, data["target/future/valid"].squeeze(-1),
+                        covariance_matrices) * loss_coeff
+                    losses.append(val_loss.item())
+                mean_val_loss = sum(losses)/len(losses)
+                logging.info(f"Step {num_steps}, val loss {mean_val_loss}")
             saving_data = {
                 "num_steps": num_steps,
                 "model_state_dict": model.state_dict(),
@@ -131,6 +144,7 @@ for epoch in tqdm(range(config["train"]["n_epochs"])):
             if config["train"]["scheduler"]:
                 saving_data["scheduler_state_dict"] = scheduler.state_dict()
             torch.save(saving_data, os.path.join(models_path, f"{num_steps}.pth"))
+        logging.debug(f"Step {num_steps}, train loss {train_loss}")
         num_steps += 1
         this_num_steps += 1
         if "max_iterations" in config["train"] and num_steps > config["train"]["max_iterations"]:

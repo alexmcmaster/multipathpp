@@ -24,3 +24,4 @@ archive/*
 code/run.sh
 .*.swp
 .*.swo
+*.log
