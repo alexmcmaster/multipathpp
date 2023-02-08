@@ -1,7 +1,10 @@
 import tensorflow as tf
 import numpy as np
 from matplotlib import pyplot as plt
-from utils.features_description import generate_features_description
+try:
+    from prerender.utils.features_description import generate_features_description
+except ImportError:
+    from utils.features_description import generate_features_description
 
 def parse_one_scene(filename):
     dataset = tf.data.TFRecordDataset(filename, compression_type='')
@@ -50,3 +53,14 @@ def plot_scene(scene_data):
             scene_data["target/width"], color)
             
     plot_roadlines(scene_data["road_network_segments"])
+
+def plot_scene_prediction(scene_data, p, conf):
+    plot_scene(scene_data)
+    inds = conf.argsort()
+    p = p[inds[::-1]]
+    for i, pred in enumerate(p):
+        for pos in pred:
+            yaw = 0
+            length = .01
+            width = .01
+            plot_arrowbox(pos, yaw, length, width, color="purple", alpha=1/(i+1))
