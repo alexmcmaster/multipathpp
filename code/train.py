@@ -17,7 +17,8 @@ import sys
 import random
 import logging
 
-logging.basicConfig(filename="train.log", encoding="utf-8", level=logging.DEBUG)
+logging.basicConfig(filename="train.log", encoding="utf-8", level=logging.DEBUG,
+        format='%(levelname)s %(asctime)s %(message)s', datefmt='%d.%m.%Y %H:%M:%S')
 
 seed = 0
 torch.manual_seed(seed)
@@ -76,77 +77,84 @@ for epoch in tqdm(range(config["train"]["n_epochs"])):
     logging.info(f'Epoch {epoch+1}/{config["train"]["n_epochs"]}')
     pbar = tqdm(dataloader)
     for data in pbar:
-        model.train()
-        optimizer.zero_grad()
-        if config["train"]["normalize"]:
-            data = normalize(data, config)
-        dict_to_cuda(data)
-        probas, coordinates, covariance_matrices, loss_coeff = model(data, num_steps)
-        assert torch.isfinite(coordinates).all()
-        assert torch.isfinite(probas).all()
-        assert torch.isfinite(covariance_matrices).all()
-        xy_future_gt = data["target/future/xy"]
-        if config["train"]["normalize_output"]:
-            # assert not (config["train"]["normalize_output"] and config["train"]["trainable_cov"])
-            xy_future_gt = (data["target/future/xy"] - torch.Tensor([1.4715e+01, 4.3008e-03]).cuda()) / 10.
-            assert torch.isfinite(xy_future_gt).all()
-        loss = nll_with_covariances(
-            xy_future_gt, coordinates, probas, data["target/future/valid"].squeeze(-1),
-            covariance_matrices) * loss_coeff
-        train_loss = loss.item()
-        train_losses.append(loss.item())
-        loss.backward()
-        if "clip_grad_norm" in config["train"]:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), config["train"]["clip_grad_norm"])
-        optimizer.step()
-        if config["train"]["normalize_output"]:
-            _coordinates = coordinates.detach() * 10. + torch.Tensor([1.4715e+01, 4.3008e-03]).cuda()
-        else:
-            _coordinates = coordinates.detach()
-        if num_steps % 10 == 0:
-            pbar.set_description(f"loss = {round(loss.item(), 2)}")
-        if num_steps % 1000 == 0 and this_num_steps > 0:
-            saving_data = {
-                "num_steps": num_steps,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-            }
-            if config["train"]["scheduler"]:
-                saving_data["scheduler_state_dict"] = scheduler.state_dict()
-            torch.save(saving_data, os.path.join(models_path, f"last.pth"))
-        if num_steps % len(dataloader) == 0 and this_num_steps > 0:
-            del data
-            torch.cuda.empty_cache()
-            model.eval()
-            with torch.no_grad():
-                losses = []
-                logging.debug(f"Computing validation loss...")
-                for data in tqdm(val_dataloader):
-                    if config["train"]["normalize"]:
-                        data = normalize(data, config)
-                    dict_to_cuda(data)
-                    probas, coordinates, covariance_matrices, loss_coeff = model(data, num_steps)
-                    xy_future_gt = data["target/future/xy"]
-                    if config["train"]["normalize_output"]:
-                        xy_future_gt = (data["target/future/xy"]\
-                                - torch.Tensor([1.4715e+01, 4.3008e-03]).cuda()) / 10.
-                    val_loss = nll_with_covariances(
-                        xy_future_gt, coordinates, probas, data["target/future/valid"].squeeze(-1),
-                        covariance_matrices) * loss_coeff
-                    losses.append(val_loss.item())
-                mean_val_loss = sum(losses)/len(losses)
-                logging.info(f"Step {num_steps}, val loss {mean_val_loss}")
-            saving_data = {
-                "num_steps": num_steps,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-            }
-            if config["train"]["scheduler"]:
-                saving_data["scheduler_state_dict"] = scheduler.state_dict()
-            torch.save(saving_data, os.path.join(models_path, f"{num_steps}.pth"))
-        logging.debug(f"Step {num_steps}, train loss {train_loss}")
-        num_steps += 1
-        this_num_steps += 1
-        if "max_iterations" in config["train"] and num_steps > config["train"]["max_iterations"]:
-            break
-
+        try:
+            model.train()
+            optimizer.zero_grad()
+            if config["train"]["normalize"]:
+                data = normalize(data, config)
+            dict_to_cuda(data)
+            probas, coordinates, covariance_matrices, loss_coeff = model(data, num_steps)
+            assert torch.isfinite(coordinates).all()
+            assert torch.isfinite(probas).all()
+            assert torch.isfinite(covariance_matrices).all()
+            xy_future_gt = data["target/future/xy"]
+            if config["train"]["normalize_output"]:
+                # assert not (config["train"]["normalize_output"] and config["train"]["trainable_cov"])
+                xy_future_gt = (data["target/future/xy"] - torch.Tensor([1.4715e+01, 4.3008e-03]).cuda()) / 10.
+                assert torch.isfinite(xy_future_gt).all()
+            loss = nll_with_covariances(
+                xy_future_gt, coordinates, probas, data["target/future/valid"].squeeze(-1),
+                covariance_matrices) * loss_coeff
+            train_loss = loss.item()
+            train_losses.append(loss.item())
+            loss.backward()
+            if "clip_grad_norm" in config["train"]:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config["train"]["clip_grad_norm"])
+            optimizer.step()
+            if config["train"]["normalize_output"]:
+                _coordinates = coordinates.detach() * 10. + torch.Tensor([1.4715e+01, 4.3008e-03]).cuda()
+            else:
+                _coordinates = coordinates.detach()
+            if num_steps % 10 == 0:
+                pbar.set_description(f"loss = {round(loss.item(), 2)}")
+            if num_steps % 1000 == 0 and this_num_steps > 0:
+                saving_data = {
+                    "num_steps": num_steps,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                }
+                if config["train"]["scheduler"]:
+                    saving_data["scheduler_state_dict"] = scheduler.state_dict()
+                torch.save(saving_data, os.path.join(models_path, f"last.pth"))
+            if num_steps % (len(dataloader) // 2) == 0 and this_num_steps > 0:
+                del data
+                torch.cuda.empty_cache()
+                model.eval()
+                with torch.no_grad():
+                    losses = []
+                    logging.debug(f"Computing validation loss...")
+                    for i, data in enumerate(tqdm(val_dataloader)):
+                        try:
+                            if config["train"]["normalize"]:
+                                data = normalize(data, config)
+                            dict_to_cuda(data)
+                            probas, coordinates, covariance_matrices, loss_coeff = model(data, num_steps)
+                            xy_future_gt = data["target/future/xy"]
+                            if config["train"]["normalize_output"]:
+                                xy_future_gt = (data["target/future/xy"]\
+                                        - torch.Tensor([1.4715e+01, 4.3008e-03]).cuda()) / 10.
+                            val_loss = nll_with_covariances(
+                                xy_future_gt, coordinates, probas, data["target/future/valid"].squeeze(-1),
+                                covariance_matrices) * loss_coeff
+                            losses.append(val_loss.item())
+                        except Exception as err:
+                            logging.error(f"Step {num_steps}, val {i}, skipping due to exception: {type(err)} {err}")
+                            continue
+                    mean_val_loss = sum(losses)/len(losses)
+                    logging.info(f"Step {num_steps}, val loss {mean_val_loss}")
+                saving_data = {
+                    "num_steps": num_steps,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                }
+                if config["train"]["scheduler"]:
+                    saving_data["scheduler_state_dict"] = scheduler.state_dict()
+                torch.save(saving_data, os.path.join(models_path, f"{num_steps}.pth"))
+            logging.debug(f"Step {num_steps}, train loss {train_loss}")
+            num_steps += 1
+            this_num_steps += 1
+            if "max_iterations" in config["train"] and num_steps > config["train"]["max_iterations"]:
+                break
+        except Exception as err:
+            logging.error(f"Step {num_steps}, skipping due to exception: {type(err)} {err}")
+            continue
